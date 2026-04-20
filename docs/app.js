@@ -11,6 +11,7 @@ const state = {
   countyStatsByCounty: new Map(),
   geojson: null,
   selectedCounty: null,
+  showAllLabels: false,
   scatter: {
     counties: [],
     x: [],
@@ -36,6 +37,11 @@ function normalizeCountyName(name) {
   s = s.replace(/[^a-z0-9\s]/g, " ");
   s = s.replace(/\s+/g, " ").trim();
   return s;
+}
+
+function shortCountyLabel(name) {
+  if (!name) return "";
+  return String(name).replace(/\s+County$/, "").trim();
 }
 
 function formatPct(x, digits = 2) {
@@ -168,13 +174,14 @@ function renderScatter() {
 
   const labels = counties.map((c, idx) => quadrantLabel(xVolPct[idx], yPredPct[idx], xMed, yMed));
   const colors = labels.map((l) => quadrantColor(l));
+  const baseText = counties.map(() => "");
 
   const trace = {
     type: "scatter",
     mode: "markers+text",
     x: xVolPct,
     y: yPredPct,
-    text: counties.map((c) => c.replace(/ County$/, "")),
+    text: baseText,
     textposition: "middle center",
     textfont: { size: 9, color: "rgba(233,238,248,0.90)" },
     marker: {
@@ -202,6 +209,7 @@ function renderScatter() {
     margin: { l: 55, r: 20, t: 10, b: 55 },
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
+    hovermode: "closest",
     xaxis: {
       title: "Historical volatility (std of YoY change, 2021–2025, % points)",
       gridcolor: "rgba(233,238,248,0.10)",
@@ -246,8 +254,31 @@ function renderScatter() {
     selectCounty(county);
   });
 
+  const toggle = document.getElementById("toggleLabels");
+  if (toggle) {
+    toggle.checked = Boolean(state.showAllLabels);
+    toggle.addEventListener("change", () => {
+      state.showAllLabels = Boolean(toggle.checked);
+      applyScatterLabelMode();
+    });
+  }
+
   document.getElementById("scatterHint").textContent =
-    "Tip: click a point to see county details and highlight it on the NY map.";
+    "Tip: hover for names, click to select. Use “Labels” to show/hide all county labels.";
+}
+
+function applyScatterLabelMode() {
+  const selectedKey = normalizeCountyName(state.selectedCounty || "");
+  const selectedIdx = selectedKey ? state.scatter.pointIndexByCounty.get(selectedKey) : undefined;
+
+  const text = state.scatter.counties.map((c, idx) => {
+    if (state.showAllLabels) return shortCountyLabel(c);
+    if (selectedIdx !== undefined && idx === selectedIdx) return shortCountyLabel(c);
+    return "";
+  });
+
+  const fontSize = state.showAllLabels ? 8 : 10;
+  Plotly.restyle("scatter", { text: [text], "textfont.size": fontSize });
 }
 
 function growthColorScale(value, min, max) {
@@ -355,6 +386,7 @@ function updateScatterSelection(countyKey) {
     "marker.size": [state.scatter.x.map((_, i) => (i === idx ? 16 : 10))],
     "marker.opacity": [state.scatter.x.map((_, i) => (i === idx ? 1.0 : 0.75))],
   });
+  applyScatterLabelMode();
 }
 
 function updateMapSelection(countyKey) {
@@ -520,6 +552,7 @@ async function main() {
     if (!best || row.predicted_growth > best.predicted_growth) best = row;
   }
   if (best?.county) selectCounty(best.county);
+  applyScatterLabelMode();
 }
 
 main().catch((err) => {
@@ -535,4 +568,3 @@ main().catch((err) => {
       )}</div></div>`;
   }
 });
-
