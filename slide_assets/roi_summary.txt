@@ -1,0 +1,7 @@
+ROI summary (2025 test rows, model_dataset.csv)
+MAE on zhvi_next (vs predicted_zhvi_next): $8,057.59
+Median zhvi (same rows): $232,742.91
+MAE / median zhvi: 3.46%
+
+Use Slide 4: typical dollar error on next-year county-level index;
+not a substitute for property-level appraisal.

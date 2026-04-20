@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NY County Risk vs Reward</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="header">
+      <div class="header__left">
+        <div class="header__title">NY County Risk vs Reward</div>
+        <div class="header__subtitle">
+          Risk = historical volatility (2021–2025). Reward = predicted 1‑year growth (forecast year 2025 → actual 2026).
+        </div>
+      </div>
+      <div class="header__right">
+        <div class="pill">
+          Forecast year:
+          <select id="forecastYear" disabled title="Locked to 2025 for this v1 demo">
+            <option value="2025" selected>2025</option>
+          </select>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="card">
+        <div class="card__title">Quadrant Scatter (Click a county)</div>
+        <div id="scatter" class="viz viz--scatter"></div>
+        <div class="hint" id="scatterHint"></div>
+      </section>
+
+      <section class="card">
+        <div class="card__title">NY County Map (Click a county)</div>
+        <div id="map" class="viz viz--map"></div>
+        <div class="legend" id="mapLegend"></div>
+      </section>
+
+      <section class="card card--details">
+        <div class="card__title">
+          County Details
+          <span class="muted" id="selectedCountyLabel">—</span>
+        </div>
+        <div class="details">
+          <div class="kpis" id="kpis"></div>
+          <div class="details__chart">
+            <div class="card__title card__title--small">ZHVI Trend (2021–2026)</div>
+            <div id="trend" class="viz viz--trend"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      Data sources: `model_dataset.csv`, `zillow_county_yearly.csv`, and `ny_counties.geojson` (bundled in <code>docs/data/</code>).
+    </footer>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"
+      crossorigin="anonymous"
+    ></script>
+    <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
+
