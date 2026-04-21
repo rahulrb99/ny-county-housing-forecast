@@ -12,3 +12,4 @@ env/
 .mypy_cache/
 
 .gitdir/
+.ssh/
