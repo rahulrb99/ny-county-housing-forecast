@@ -15,7 +15,5 @@ env/
 .ssh/
 
 # Keep the public repo focused on the deployed Pages site
-01_zillow_cleaning.ipynb
-02_merge_and_model.ipynb
 scripts/
 requirements.txt

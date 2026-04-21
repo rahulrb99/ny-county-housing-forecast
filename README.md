@@ -10,6 +10,13 @@ This repo is intentionally kept **minimal** and focused on the deployed visualiz
 - **NY map synced with scatter:** click either view to select a county
 - **Details panel:** predicted vs actual growth + ZHVI trend
 
+## Notebooks
+
+The original analysis/modeling work is included as notebooks:
+
+- `01_zillow_cleaning.ipynb`
+- `02_merge_and_model.ipynb`
+
 ## Run Locally
 
 Because the app loads CSV/GeoJSON via `fetch()`, it must be served over HTTP:
