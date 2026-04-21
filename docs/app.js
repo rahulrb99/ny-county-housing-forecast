@@ -263,6 +263,39 @@ function renderScatter() {
     });
   }
 
+  const search = document.getElementById("countySearch");
+  const list = document.getElementById("countyList");
+  if (list) {
+    const opts = counties
+      .slice()
+      .sort((a, b) => a.localeCompare(b))
+      .map((c) => `<option value="${c}"></option>`)
+      .join("");
+    list.innerHTML = opts;
+  }
+  if (search) {
+    const onCommit = () => {
+      const v = String(search.value || "").trim();
+      if (!v) return;
+      // allow partial matches like "St Lawrence" or "New York"
+      const k = normalizeCountyName(v);
+      const direct = state.countyStatsByCounty.get(k);
+      if (direct?.county) {
+        selectCounty(direct.county);
+        return;
+      }
+      // fallback: find first county containing query
+      const candidates = Array.from(state.countyStatsByCounty.values()).map((r) => r.county);
+      const hit = candidates.find((c) => normalizeCountyName(c).includes(k));
+      if (hit) selectCounty(hit);
+    };
+    search.addEventListener("change", onCommit);
+    search.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") onCommit();
+      if (e.key === "Escape") search.value = "";
+    });
+  }
+
   document.getElementById("scatterHint").textContent =
     "Tip: hover for names, click to select. Use “Labels” to show/hide all county labels.";
 }
@@ -522,6 +555,8 @@ function selectCounty(countyName) {
 
   state.selectedCounty = row.county;
   document.getElementById("selectedCountyLabel").textContent = row.county;
+  const search = document.getElementById("countySearch");
+  if (search) search.value = row.county;
 
   updateScatterSelection(countyKey);
   updateMapSelection(countyKey);

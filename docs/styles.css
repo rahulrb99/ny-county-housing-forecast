@@ -92,6 +92,28 @@ select {
   padding: 6px 10px;
 }
 
+.search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search input {
+  width: 220px;
+  max-width: 34vw;
+  background: rgba(233, 238, 248, 0.08);
+  border: 1px solid rgba(233, 238, 248, 0.18);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 7px 10px;
+  outline: none;
+}
+
+.search input:focus {
+  border-color: rgba(89, 183, 255, 0.55);
+  box-shadow: 0 0 0 3px rgba(89, 183, 255, 0.15);
+}
+
 .layout {
   padding: 18px 20px 24px;
   display: grid;
@@ -216,6 +238,9 @@ select {
   }
   .details {
     grid-template-columns: 1fr;
+  }
+  .search input {
+    width: 170px;
   }
   .viz--scatter,
   .viz--map {

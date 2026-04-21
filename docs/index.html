@@ -28,6 +28,12 @@
             <option value="2025" selected>2025</option>
           </select>
           <span class="pill__sep"></span>
+          <label class="search" title="Search and jump to a county">
+            <span class="muted">County:</span>
+            <input id="countySearch" list="countyList" placeholder="Type to search…" autocomplete="off" />
+            <datalist id="countyList"></datalist>
+          </label>
+          <span class="pill__sep"></span>
           <label class="toggle" title="Show/hide all county labels on the scatter">
             <input id="toggleLabels" type="checkbox" />
             <span>Labels</span>

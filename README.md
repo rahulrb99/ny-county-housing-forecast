@@ -1,45 +1,32 @@
-# NY County Housing “Risk vs Reward” Viewer
+# NY County Housing Forecast — Risk vs Reward Viewer
 
-This project builds a simple **static GitHub Pages** site that visualizes New York counties on a **risk vs reward** quadrant:
+Live site:
 
-- **Risk (x-axis):** historical ZHVI year-over-year volatility (std dev of YoY % returns, 2021–2025)
-- **Reward (y-axis):** predicted 1-year growth for **forecast year 2025** (interpreted as predicting **2026**)
-- **Map + scatter are synced:** click a county on either view to see details
-- **Details show predicted vs actual (2026)** plus a ZHVI trend chart
+`https://rahulrb99.github.io/ny-county-housing-forecast/`
 
-## Web Demo (GitHub Pages)
+This repo is intentionally kept **minimal** and focused on the deployed visualization:
 
-After enabling Pages for this repo:
-
-- GitHub → **Settings** → **Pages**
-- Source: **Deploy from a branch**
-- Branch: `main`
-- Folder: `/docs`
-
-Your site URL will look like:
-
-`https://<your-username>.github.io/<your-repo>/`
+- **4‑quadrant scatter:** risk = historical volatility (2021–2025), reward = predicted growth (forecast year 2025 → 2026)
+- **NY map synced with scatter:** click either view to select a county
+- **Details panel:** predicted vs actual growth + ZHVI trend
 
 ## Run Locally
 
-GitHub Pages features like `fetch()` won’t work from `file://` URLs. Run a local server:
+Because the app loads CSV/GeoJSON via `fetch()`, it must be served over HTTP:
 
 ```bash
 cd docs
 python -m http.server 8000
 ```
 
-Then open:
+Open:
 
 `http://localhost:8000`
 
-## Data Notes
+## Data Used by the Site
 
-The frontend loads data directly (no build step) from:
+The static frontend reads (no build step):
 
 - `docs/data/model_dataset.csv`
 - `docs/data/zillow_county_yearly.csv`
 - `docs/data/ny_counties.geojson`
-
-These are copies of the project outputs so the Pages site is self-contained.
-
