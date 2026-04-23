@@ -4,29 +4,20 @@ const DATA_DIR = "./data";
 const FORECAST_YEAR = 2025;
 const VOL_MAX_YEAR = 2025;
 
-const FILTERS = [
-  { id: "undervalued", label: "Undervalued" },
-  { id: "highAppreciation", label: "High Appreciation" },
-  { id: "lowerVolatility", label: "Lower Volatility" },
-  { id: "youngBuyer", label: "Young Buyer Signal" },
-  { id: "rentalDemand", label: "Rental Demand Signal" },
-];
-
 const state = {
   modelRows: [],
   yearlyRows: [],
-  geojson: null,
   volatilityByCounty: new Map(),
   countyStatsByCounty: new Map(),
+  geojson: null,
   selectedCounty: null,
   showAllLabels: false,
-  activeFilters: new Set(),
-  medians: {},
-  topTargets: [],
   scatter: {
     counties: [],
     x: [],
     y: [],
+    xMedian: 0,
+    yMedian: 0,
     pointIndexByCounty: new Map(),
   },
   map: {
@@ -49,12 +40,31 @@ function normalizeCountyName(name) {
 }
 
 function shortCountyLabel(name) {
-  return String(name || "").replace(/\s+County$/, "").trim();
+  if (!name) return "";
+  return String(name).replace(/\s+County$/, "").trim();
+}
+
+function formatPct(x, digits = 2) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "—";
+  return `${(x * 100).toFixed(digits)}%`;
+}
+
+function formatPctPoints(x, digits = 2) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "—";
+  return `${x.toFixed(digits)}%`;
+}
+
+function formatNumber(x, digits = 0) {
+  if (x === null || x === undefined || Number.isNaN(x)) return "—";
+  return Number(x).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
 }
 
 function parseCSV(text) {
   const parsed = Papa.parse(text, { header: true, dynamicTyping: true, skipEmptyLines: true });
-  if (parsed.errors?.length) console.warn("CSV parse errors:", parsed.errors.slice(0, 3));
+  if (parsed.errors?.length) {
+    // eslint-disable-next-line no-console
+    console.warn("CSV parse errors:", parsed.errors.slice(0, 3));
+  }
   return parsed.data;
 }
 
@@ -70,222 +80,179 @@ async function fetchJSON(path) {
   return await res.json();
 }
 
-function formatPct(x, digits = 2) {
-  if (!Number.isFinite(Number(x))) return "-";
-  return `${(Number(x) * 100).toFixed(digits)}%`;
-}
-
-function formatPctPoints(x, digits = 2) {
-  if (!Number.isFinite(Number(x))) return "-";
-  return `${Number(x).toFixed(digits)}%`;
-}
-
-function formatNumber(x, digits = 0) {
-  if (!Number.isFinite(Number(x))) return "-";
-  return Number(x).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits });
-}
-
-function median(values) {
-  const v = values.filter((x) => Number.isFinite(Number(x))).map(Number).sort((a, b) => a - b);
-  if (!v.length) return 0;
-  const mid = Math.floor(v.length / 2);
-  return v.length % 2 === 1 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
-}
-
 function computeVolatilityByCounty(yearlyRows) {
-  const byCounty = new Map();
+  // 1) build county->(year->zhvi)
+  const map = new Map();
   for (const row of yearlyRows) {
     const year = Number(row.year);
     if (!Number.isFinite(year) || year > VOL_MAX_YEAR) continue;
-    const key = normalizeCountyName(row.county);
-    if (!key) continue;
-    if (!byCounty.has(key)) byCounty.set(key, new Map());
-    byCounty.get(key).set(year, Number(row.zhvi));
+    const county = row.county;
+    if (!county) continue;
+    const k = normalizeCountyName(county);
+    if (!map.has(k)) map.set(k, new Map());
+    map.get(k).set(year, Number(row.zhvi));
   }
 
-  const volatility = new Map();
-  for (const [key, yearToZhvi] of byCounty.entries()) {
+  // 2) compute YoY returns and std dev (sample)
+  const volByCounty = new Map();
+  for (const [k, yearToZhvi] of map.entries()) {
     const years = Array.from(yearToZhvi.keys()).sort((a, b) => a - b);
     const returns = [];
     for (let i = 1; i < years.length; i++) {
-      const prev = yearToZhvi.get(years[i - 1]);
-      const cur = yearToZhvi.get(years[i]);
-      if (Number.isFinite(prev) && Number.isFinite(cur) && prev !== 0) returns.push(cur / prev - 1);
+      const yPrev = years[i - 1];
+      const yCur = years[i];
+      const zPrev = yearToZhvi.get(yPrev);
+      const zCur = yearToZhvi.get(yCur);
+      if (!Number.isFinite(zPrev) || !Number.isFinite(zCur) || zPrev === 0) continue;
+      returns.push(zCur / zPrev - 1);
     }
     if (returns.length < 2) continue;
     const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-    const sampleVar = returns.reduce((sum, r) => sum + (r - mean) ** 2, 0) / (returns.length - 1);
-    volatility.set(key, Math.sqrt(sampleVar));
+    const varSample =
+      returns.reduce((sum, r) => sum + (r - mean) * (r - mean), 0) / (returns.length - 1);
+    volByCounty.set(k, Math.sqrt(varSample));
   }
-  return volatility;
+  return volByCounty;
 }
 
 function buildCountyStats(modelRows, volatilityByCounty) {
   const stats = new Map();
   for (const row of modelRows) {
     if (Number(row.year) !== FORECAST_YEAR) continue;
-    const key = normalizeCountyName(row.county);
-    const vol = volatilityByCounty.get(key);
-    if (!key || !Number.isFinite(vol)) continue;
-    stats.set(key, { ...row, volatility: vol });
+    const county = row.county;
+    if (!county) continue;
+    const k = normalizeCountyName(county);
+    const vol = volatilityByCounty.get(k);
+    if (!Number.isFinite(vol)) continue;
+    stats.set(k, { ...row, volatility: vol });
   }
   return stats;
 }
 
-function computeDerivedMetrics() {
-  const rows = Array.from(state.countyStatsByCounty.values());
-  state.medians = {
-    zhvi: median(rows.map((r) => r.zhvi)),
-    appreciation: median(rows.map((r) => r.predicted_growth)),
-    volatility: median(rows.map((r) => r.volatility)),
-    age25_34: median(rows.map((r) => r.pct_age_25_34)),
-    rent: median(rows.map((r) => r.median_rent)),
-  };
-  state.topTargets = rows
-    .slice()
-    .sort((a, b) => Number(b.opportunity_score) - Number(a.opportunity_score))
-    .slice(0, 5);
+function median(values) {
+  const v = values.filter((x) => Number.isFinite(x)).slice().sort((a, b) => a - b);
+  if (!v.length) return 0;
+  const mid = Math.floor(v.length / 2);
+  if (v.length % 2 === 1) return v[mid];
+  return (v[mid - 1] + v[mid]) / 2;
 }
 
-function getBadges(row) {
-  const badges = [];
-  if (Number(row.zhvi) < state.medians.zhvi) badges.push({ id: "undervalued", label: "Affordable Entry" });
-  if (Number(row.predicted_growth) > state.medians.appreciation) badges.push({ id: "highAppreciation", label: "High Appreciation" });
-  if (Number(row.volatility) < state.medians.volatility) badges.push({ id: "lowerVolatility", label: "Lower Volatility" });
-  if (Number(row.pct_age_25_34) > state.medians.age25_34) badges.push({ id: "youngBuyer", label: "Young Buyer Signal" });
-  if (Number(row.median_rent) > state.medians.rent) badges.push({ id: "rentalDemand", label: "Rental Demand Signal" });
-  return badges;
-}
-
-function passesFilters(row) {
-  if (!state.activeFilters.size) return true;
-  const badgeIds = new Set(getBadges(row).map((b) => b.id));
-  return Array.from(state.activeFilters).every((id) => badgeIds.has(id));
-}
-
-function visibleRows() {
-  const selectedKey = normalizeCountyName(state.selectedCounty || "");
-  return Array.from(state.countyStatsByCounty.values()).filter((row) => {
-    return passesFilters(row) || normalizeCountyName(row.county) === selectedKey;
-  });
-}
-
-function quadrantLabel(volPct, appreciationPct) {
-  const lowRisk = volPct <= state.medians.volatility * 100;
-  const highAppreciation = appreciationPct >= state.medians.appreciation * 100;
-  if (highAppreciation && lowRisk) return "Best Flip Targets";
-  if (highAppreciation && !lowRisk) return "Speculative Upside";
-  if (!highAppreciation && lowRisk) return "Stable but Slow";
-  return "Low Priority / Avoid";
+function quadrantLabel(volPct, growthPct, xMed, yMed) {
+  const risk = volPct <= xMed ? "Low risk" : "High risk";
+  const reward = growthPct >= yMed ? "High reward" : "Low reward";
+  return `${reward} / ${risk}`;
 }
 
 function quadrantColor(label) {
+  // Keep consistent and readable on dark background.
   const colors = {
-    "Best Flip Targets": "#35d07f",
-    "Speculative Upside": "#59b7ff",
-    "Stable but Slow": "#ffcc66",
-    "Low Priority / Avoid": "#ff6b6b",
+    "High reward / Low risk": "#35d07f",
+    "High reward / High risk": "#59b7ff",
+    "Low reward / Low risk": "#ffcc66",
+    "Low reward / High risk": "#ff6b6b",
   };
   return colors[label] || "#b7c4e0";
 }
 
-function rowByCounty(county) {
-  return state.countyStatsByCounty.get(normalizeCountyName(county));
-}
+function renderScatter() {
+  const counties = [];
+  const xVolPct = [];
+  const yPredPct = [];
+  const oppScore = [];
 
-function renderTargetCards() {
-  const el = document.getElementById("targetCards");
-  el.innerHTML = state.topTargets
-    .map((row, index) => {
-      const active = normalizeCountyName(row.county) === normalizeCountyName(state.selectedCounty);
-      return `
-        <button class="target-card ${active ? "is-selected" : ""}" data-county="${row.county}">
-          <span class="target-card__rank">#${index + 1}</span>
-          <span class="target-card__county">${shortCountyLabel(row.county)}</span>
-          <span class="target-card__grid">
-            <span class="target-card__metric"><span>2025 value</span><strong>$${formatNumber(row.zhvi, 0)}</strong></span>
-            <span class="target-card__metric"><span>12M appreciation</span><strong>${formatPct(row.predicted_growth, 1)}</strong></span>
-            <span class="target-card__metric"><span>Opportunity</span><strong>${Number(row.opportunity_score).toFixed(3)}</strong></span>
-            <span class="target-card__metric"><span>Risk</span><strong>${formatPct(row.volatility, 1)}</strong></span>
-          </span>
-        </button>`;
-    })
-    .join("");
+  for (const [k, row] of state.countyStatsByCounty.entries()) {
+    counties.push(row.county);
+    xVolPct.push(row.volatility * 100);
+    yPredPct.push(row.predicted_growth * 100);
+    oppScore.push(row.opportunity_score);
+    state.scatter.pointIndexByCounty.set(k, counties.length - 1);
+  }
 
-  el.querySelectorAll("[data-county]").forEach((button) => {
-    button.addEventListener("click", () => selectCounty(button.dataset.county));
-  });
-}
+  const xMed = median(xVolPct);
+  const yMed = median(yPredPct);
+  state.scatter = { ...state.scatter, counties, x: xVolPct, y: yPredPct, xMedian: xMed, yMedian: yMed };
 
-function renderFilters() {
-  const el = document.getElementById("filterButtons");
-  el.innerHTML = FILTERS.map((filter) => {
-    const active = state.activeFilters.has(filter.id);
-    return `<button class="filter-button ${active ? "is-active" : ""}" data-filter="${filter.id}">${filter.label}</button>`;
-  }).join("");
-  el.querySelectorAll("[data-filter]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const id = button.dataset.filter;
-      if (state.activeFilters.has(id)) state.activeFilters.delete(id);
-      else state.activeFilters.add(id);
-      refreshFilteredViews();
-    });
-  });
-}
+  const labels = counties.map((c, idx) => quadrantLabel(xVolPct[idx], yPredPct[idx], xMed, yMed));
+  const colors = labels.map((l) => quadrantColor(l));
+  const baseText = counties.map(() => "");
 
-function renderDemoControls() {
-  const el = document.getElementById("demoControls");
-  const risky = Array.from(state.countyStatsByCounty.values())
-    .filter((row) => row.volatility > state.medians.volatility && row.predicted_growth < state.medians.appreciation)
-    .sort((a, b) => b.volatility - a.volatility)[0];
-  const controls = [
-    { label: "Show Top Target", action: () => selectCounty(state.topTargets[0]?.county) },
-    { label: "Show Broome", action: () => selectCounty("Broome County") },
-    { label: "Show Cortland", action: () => selectCounty("Cortland County") },
-    { label: "High Risk Example", action: () => risky && selectCounty(risky.county) },
-    {
-      label: "Reset Filters",
-      action: () => {
-        state.activeFilters.clear();
-        refreshFilteredViews();
-      },
+  const trace = {
+    type: "scatter",
+    mode: "markers+text",
+    x: xVolPct,
+    y: yPredPct,
+    text: baseText,
+    textposition: "middle center",
+    textfont: { size: 9, color: "rgba(233,238,248,0.90)" },
+    marker: {
+      size: 10,
+      color: colors,
+      line: { color: "rgba(255,255,255,0.65)", width: 1 },
+      opacity: 0.85,
     },
-  ];
+    customdata: counties.map((c, idx) => ({
+      county: c,
+      volatilityPct: xVolPct[idx],
+      predictedGrowthPct: yPredPct[idx],
+      opportunityScore: oppScore[idx],
+      quadrant: labels[idx],
+    })),
+    hovertemplate:
+      "<b>%{customdata.county}</b><br>" +
+      "Volatility: %{customdata.volatilityPct:.2f}% pts<br>" +
+      "Predicted growth: %{customdata.predictedGrowthPct:.2f}%<br>" +
+      "Opportunity score: %{customdata.opportunityScore:.4f}<br>" +
+      "%{customdata.quadrant}<extra></extra>",
+  };
 
-  el.innerHTML = controls.map((c, i) => `<button class="demo-button" data-demo="${i}">${c.label}</button>`).join("");
-  el.querySelectorAll("[data-demo]").forEach((button) => {
-    button.addEventListener("click", () => controls[Number(button.dataset.demo)]?.action());
+  const layout = {
+    margin: { l: 55, r: 20, t: 10, b: 55 },
+    paper_bgcolor: "rgba(0,0,0,0)",
+    plot_bgcolor: "rgba(0,0,0,0)",
+    hovermode: "closest",
+    xaxis: {
+      title: "Historical volatility (std of YoY change, 2021–2025, % points)",
+      gridcolor: "rgba(233,238,248,0.10)",
+      zerolinecolor: "rgba(233,238,248,0.18)",
+    },
+    yaxis: {
+      title: "Predicted 1-year growth (%)",
+      gridcolor: "rgba(233,238,248,0.10)",
+      zerolinecolor: "rgba(233,238,248,0.18)",
+    },
+    shapes: [
+      {
+        type: "line",
+        x0: xMed,
+        x1: xMed,
+        y0: Math.min(...yPredPct) - 2,
+        y1: Math.max(...yPredPct) + 2,
+        line: { color: "rgba(233,238,248,0.35)", width: 1, dash: "dash" },
+      },
+      {
+        type: "line",
+        x0: Math.min(...xVolPct) - 1,
+        x1: Math.max(...xVolPct) + 1,
+        y0: yMed,
+        y1: yMed,
+        line: { color: "rgba(233,238,248,0.35)", width: 1, dash: "dash" },
+      },
+    ],
+    showlegend: false,
+  };
+
+  const config = { responsive: true, displayModeBar: false };
+
+  Plotly.newPlot("scatter", [trace], layout, config);
+
+  const scatterDiv = document.getElementById("scatter");
+  scatterDiv.on("plotly_click", (evt) => {
+    const pt = evt?.points?.[0];
+    if (!pt) return;
+    const county = pt.customdata?.county;
+    if (!county) return;
+    selectCounty(county);
   });
-}
-
-function setupHeaderControls() {
-  const list = document.getElementById("countyList");
-  if (list) {
-    list.innerHTML = Array.from(state.countyStatsByCounty.values())
-      .map((r) => r.county)
-      .sort((a, b) => a.localeCompare(b))
-      .map((county) => `<option value="${county}"></option>`)
-      .join("");
-  }
-
-  const search = document.getElementById("countySearch");
-  if (search) {
-    const onCommit = () => {
-      const value = String(search.value || "").trim();
-      if (!value) return;
-      const direct = rowByCounty(value);
-      if (direct) return selectCounty(direct.county);
-      const hit = Array.from(state.countyStatsByCounty.values()).find((row) =>
-        normalizeCountyName(row.county).includes(normalizeCountyName(value))
-      );
-      if (hit) selectCounty(hit.county);
-    };
-    search.addEventListener("change", onCommit);
-    search.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") onCommit();
-      if (e.key === "Escape") search.value = "";
-    });
-  }
 
   const toggle = document.getElementById("toggleLabels");
   if (toggle) {
@@ -295,171 +262,135 @@ function setupHeaderControls() {
       applyScatterLabelMode();
     });
   }
-}
 
-function renderScatter() {
-  const rows = visibleRows();
-  const counties = [];
-  const xVolPct = [];
-  const yPredPct = [];
-  const oppScore = [];
-  state.scatter.pointIndexByCounty = new Map();
-
-  for (const row of rows) {
-    const key = normalizeCountyName(row.county);
-    counties.push(row.county);
-    xVolPct.push(row.volatility * 100);
-    yPredPct.push(row.predicted_growth * 100);
-    oppScore.push(row.opportunity_score);
-    state.scatter.pointIndexByCounty.set(key, counties.length - 1);
+  const search = document.getElementById("countySearch");
+  const list = document.getElementById("countyList");
+  if (list) {
+    const opts = counties
+      .slice()
+      .sort((a, b) => a.localeCompare(b))
+      .map((c) => `<option value="${c}"></option>`)
+      .join("");
+    list.innerHTML = opts;
+  }
+  if (search) {
+    const onCommit = () => {
+      const v = String(search.value || "").trim();
+      if (!v) return;
+      // allow partial matches like "St Lawrence" or "New York"
+      const k = normalizeCountyName(v);
+      const direct = state.countyStatsByCounty.get(k);
+      if (direct?.county) {
+        selectCounty(direct.county);
+        return;
+      }
+      // fallback: find first county containing query
+      const candidates = Array.from(state.countyStatsByCounty.values()).map((r) => r.county);
+      const hit = candidates.find((c) => normalizeCountyName(c).includes(k));
+      if (hit) selectCounty(hit);
+    };
+    search.addEventListener("change", onCommit);
+    search.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") onCommit();
+      if (e.key === "Escape") search.value = "";
+    });
   }
 
-  const xMed = state.medians.volatility * 100;
-  const yMed = state.medians.appreciation * 100;
-  const xMin = Math.min(...xVolPct, xMed) - 1;
-  const xMax = Math.max(...xVolPct, xMed) + 1;
-  const yMin = Math.min(...yPredPct, yMed) - 2;
-  const yMax = Math.max(...yPredPct, yMed) + 2;
-  const labels = counties.map((c, idx) => quadrantLabel(xVolPct[idx], yPredPct[idx]));
-
-  state.scatter = { ...state.scatter, counties, x: xVolPct, y: yPredPct };
-
-  const trace = {
-    type: "scatter",
-    mode: "markers+text",
-    x: xVolPct,
-    y: yPredPct,
-    text: counties.map(() => ""),
-    textposition: "middle center",
-    textfont: { size: 9, color: "rgba(233,238,248,0.90)" },
-    marker: {
-      size: 10,
-      color: labels.map((label) => quadrantColor(label)),
-      line: { color: "rgba(255,255,255,0.65)", width: 1 },
-      opacity: 0.86,
-    },
-    customdata: counties.map((county, idx) => ({
-      county,
-      volatilityPct: xVolPct[idx],
-      predictedAppreciationPct: yPredPct[idx],
-      opportunityScore: oppScore[idx],
-      quadrant: labels[idx],
-    })),
-    hovertemplate:
-      "<b>%{customdata.county}</b><br>" +
-      "Risk / volatility: %{customdata.volatilityPct:.2f}% pts<br>" +
-      "Predicted 12M Appreciation: %{customdata.predictedAppreciationPct:.2f}%<br>" +
-      "Opportunity score: %{customdata.opportunityScore:.4f}<br>" +
-      "%{customdata.quadrant}<extra></extra>",
-  };
-
-  const layout = {
-    margin: { l: 58, r: 20, t: 10, b: 58 },
-    paper_bgcolor: "rgba(0,0,0,0)",
-    plot_bgcolor: "rgba(0,0,0,0)",
-    hovermode: "closest",
-    xaxis: {
-      title: "Risk / Volatility (std of YoY change, 2021-2025, % points)",
-      gridcolor: "rgba(233,238,248,0.10)",
-      zerolinecolor: "rgba(233,238,248,0.18)",
-    },
-    yaxis: {
-      title: "Predicted 12M Appreciation (%)",
-      gridcolor: "rgba(233,238,248,0.10)",
-      zerolinecolor: "rgba(233,238,248,0.18)",
-    },
-    shapes: [
-      { type: "line", x0: xMed, x1: xMed, y0: yMin, y1: yMax, line: { color: "rgba(233,238,248,0.35)", width: 1, dash: "dash" } },
-      { type: "line", x0: xMin, x1: xMax, y0: yMed, y1: yMed, line: { color: "rgba(233,238,248,0.35)", width: 1, dash: "dash" } },
-    ],
-    showlegend: false,
-  };
-
-  Plotly.newPlot("scatter", [trace], layout, { responsive: true, displayModeBar: false });
-  document.getElementById("scatter").on("plotly_click", (evt) => {
-    const county = evt?.points?.[0]?.customdata?.county;
-    if (county) selectCounty(county);
-  });
-
   document.getElementById("scatterHint").textContent =
-    "Tip: hover for acquisition metrics, click to inspect. Active filters keep the selected county visible.";
-  applyScatterLabelMode();
+    "Tip: hover for names, click to select. Use “Labels” to show/hide all county labels.";
 }
 
 function applyScatterLabelMode() {
-  if (!document.getElementById("scatter")?.data) return;
   const selectedKey = normalizeCountyName(state.selectedCounty || "");
   const selectedIdx = selectedKey ? state.scatter.pointIndexByCounty.get(selectedKey) : undefined;
-  const text = state.scatter.counties.map((county, idx) => {
-    if (state.showAllLabels) return shortCountyLabel(county);
-    if (selectedIdx !== undefined && idx === selectedIdx) return shortCountyLabel(county);
+
+  const text = state.scatter.counties.map((c, idx) => {
+    if (state.showAllLabels) return shortCountyLabel(c);
+    if (selectedIdx !== undefined && idx === selectedIdx) return shortCountyLabel(c);
     return "";
   });
-  Plotly.restyle("scatter", { text: [text], "textfont.size": state.showAllLabels ? 8 : 10 });
+
+  const fontSize = state.showAllLabels ? 8 : 10;
+  Plotly.restyle("scatter", { text: [text], "textfont.size": fontSize });
 }
 
 function growthColorScale(value, min, max) {
   if (!Number.isFinite(value)) return "#2b3a5a";
-  const t = max === min ? 0.5 : Math.max(0, Math.min(1, (value - min) / (max - min)));
+  const lo = min;
+  const hi = max;
+  const t = hi === lo ? 0.5 : Math.max(0, Math.min(1, (value - lo) / (hi - lo)));
+  // HSL: red (0) -> green (130)
   const hue = 8 + t * 125;
-  return `hsl(${hue} 80% 45%)`;
+  const sat = 80;
+  const light = 45;
+  return `hsl(${hue} ${sat}% ${light}%)`;
 }
 
 function renderMap() {
-  const map = L.map("map", { zoomControl: true, scrollWheelZoom: false }).setView([42.9, -75.5], 6.3);
+  const map = L.map("map", {
+    zoomControl: true,
+    scrollWheelZoom: false,
+  }).setView([42.9, -75.5], 6.3);
+
+  // Basemap (no key needed)
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 18,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
 
-  const values = Array.from(state.countyStatsByCounty.values()).map((row) => row.predicted_growth * 100);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  // Determine growth range for choropleth.
+  const growthValues = [];
+  for (const row of state.countyStatsByCounty.values()) {
+    if (Number.isFinite(row.predicted_growth)) growthValues.push(row.predicted_growth * 100);
+  }
+  const min = Math.min(...growthValues);
+  const max = Math.max(...growthValues);
   state.map.growthRange = { min, max };
 
-  function styleFeature(feature) {
+  function baseStyle(feature) {
     const name = `${feature?.properties?.NAME ?? ""} ${feature?.properties?.LSAD ?? ""}`.trim();
-    const row = rowByCounty(name);
-    return mapStyleForRow(row);
+    const k = normalizeCountyName(name);
+    const row = state.countyStatsByCounty.get(k);
+    const value = row ? row.predicted_growth * 100 : NaN;
+    return {
+      fillColor: growthColorScale(value, min, max),
+      weight: 1,
+      opacity: 1,
+      color: "rgba(255,255,255,0.35)",
+      fillOpacity: 0.75,
+    };
   }
 
   function onEachFeature(feature, layer) {
     const name = `${feature?.properties?.NAME ?? ""} ${feature?.properties?.LSAD ?? ""}`.trim();
-    const key = normalizeCountyName(name);
-    state.map.featureLayerByCounty.set(key, layer);
-    const row = rowByCounty(name);
-    const appreciation = row ? row.predicted_growth * 100 : null;
+    const k = normalizeCountyName(name);
+    state.map.featureLayerByCounty.set(k, layer);
+
+    const row = state.countyStatsByCounty.get(k);
+    const predicted = row ? row.predicted_growth * 100 : null;
     layer.bindTooltip(
-      `${name}<br/>Predicted 12M Appreciation: ${appreciation === null ? "-" : appreciation.toFixed(2) + "%"}`,
+      `${name}<br/>Predicted growth: ${predicted === null ? "—" : predicted.toFixed(2) + "%"}`,
       { sticky: true }
     );
-    layer.on("click", () => row?.county && selectCounty(row.county));
-    layer.on("mouseover", () => layer.setStyle({ weight: 2, color: "rgba(255,255,255,0.8)" }));
-    layer.on("mouseout", () => refreshMapStyles());
+
+    layer.on("click", () => {
+      if (row?.county) selectCounty(row.county);
+      else selectCounty(name);
+    });
+
+    layer.on("mouseover", () => {
+      layer.setStyle({ weight: 2, color: "rgba(255,255,255,0.7)" });
+    });
+    layer.on("mouseout", () => {
+      if (normalizeCountyName(state.selectedCounty) === k) return;
+      layer.setStyle({ weight: 1, color: "rgba(255,255,255,0.35)" });
+    });
   }
 
-  state.map.layer = L.geoJSON(state.geojson, { style: styleFeature, onEachFeature }).addTo(map);
-  state.map.leaflet = map;
+  const layer = L.geoJSON(state.geojson, { style: baseStyle, onEachFeature }).addTo(map);
+  state.map = { ...state.map, leaflet: map, layer };
+
   renderMapLegend(min, max);
-}
-
-function mapStyleForRow(row) {
-  const selected = row && normalizeCountyName(row.county) === normalizeCountyName(state.selectedCounty);
-  const visible = row ? passesFilters(row) || selected : false;
-  return {
-    fillColor: growthColorScale(row ? row.predicted_growth * 100 : NaN, state.map.growthRange.min, state.map.growthRange.max),
-    weight: selected ? 3 : 1,
-    opacity: 1,
-    color: selected ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.35)",
-    fillOpacity: selected ? 0.92 : visible ? 0.75 : 0.14,
-  };
-}
-
-function refreshMapStyles() {
-  for (const [key, layer] of state.map.featureLayerByCounty.entries()) {
-    const row = state.countyStatsByCounty.get(key);
-    if (layer?.setStyle) layer.setStyle(mapStyleForRow(row));
-  }
 }
 
 function renderMapLegend(min, max) {
@@ -467,10 +398,18 @@ function renderMapLegend(min, max) {
   const steps = 6;
   const items = [];
   for (let i = 0; i < steps; i++) {
-    const value = min + (max - min) * (i / (steps - 1));
-    items.push(`<span class="swatch" style="background:${growthColorScale(value, min, max)};"></span>${value.toFixed(1)}%`);
+    const t = i / (steps - 1);
+    const v = min + (max - min) * t;
+    const color = growthColorScale(v, min, max);
+    items.push(
+      `<span class="swatch" style="background:${color};"></span>${v.toFixed(1)}%`
+    );
   }
-  legend.innerHTML = `<div class="legend-row"><span class="muted">Predicted 12M Appreciation:</span>${items.join("")}</div>`;
+  legend.innerHTML =
+    `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">` +
+    `<span class="muted">Predicted growth scale:</span>` +
+    items.join("") +
+    `</div>`;
 }
 
 function updateScatterSelection(countyKey) {
@@ -483,75 +422,75 @@ function updateScatterSelection(countyKey) {
   applyScatterLabelMode();
 }
 
-function renderKPIs(row) {
-  const predictedGrowth = Number(row.predicted_growth);
-  const actualGrowth = Number(row.target_growth);
-  const error = predictedGrowth - actualGrowth;
+function updateMapSelection(countyKey) {
+  for (const [k, layer] of state.map.featureLayerByCounty.entries()) {
+    if (!layer?.setStyle) continue;
+    const isSelected = k === countyKey;
+    layer.setStyle({
+      weight: isSelected ? 3 : 1,
+      color: isSelected ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.35)",
+      fillOpacity: isSelected ? 0.92 : 0.75,
+    });
+  }
+}
+
+function renderKPIs(row, volatility) {
+  const kpis = document.getElementById("kpis");
+  const predictedGrowth = row?.predicted_growth;
+  const actualGrowth = row?.target_growth; // next-year actual growth (2026)
+
+  const zhvi = row?.zhvi;
+  const zhviNext = row?.zhvi_next;
+  const predictedNext = row?.predicted_zhvi_next;
+  const opp = row?.opportunity_score;
+
   const items = [
     {
-      label: "Predicted 12M Appreciation",
+      label: "Predicted growth (2025 → 2026)",
       value: formatPct(predictedGrowth, 2),
-      sub: `Opportunity score: ${Number(row.opportunity_score).toFixed(4)}`,
+      sub: `Opportunity score: ${opp === null || opp === undefined ? "—" : Number(opp).toFixed(4)}`,
     },
     {
-      label: "Backtest Check",
+      label: "Actual growth (2025 → 2026)",
       value: formatPct(actualGrowth, 2),
-      sub: Number.isFinite(error) ? `Prediction error: ${(error >= 0 ? "+" : "")}${(error * 100).toFixed(2)}% pts` : "-",
+      sub:
+        predictedGrowth === null || predictedGrowth === undefined || actualGrowth === null || actualGrowth === undefined
+          ? "—"
+          : `Prediction error: ${(predictedGrowth - actualGrowth >= 0 ? "+" : "")}${((predictedGrowth - actualGrowth) * 100).toFixed(2)}% pts`,
     },
     {
-      label: "Risk / Volatility",
-      value: formatPct(row.volatility, 2),
-      sub: "Std dev of YoY home value returns",
+      label: "Risk (volatility, 2021–2025)",
+      value: formatPct(volatility, 2),
+      sub: "Std dev of YoY ZHVI returns",
     },
     {
-      label: "Current Entry Price",
-      value: `$${formatNumber(row.zhvi, 0)}`,
-      sub: `Actual 2026: $${formatNumber(row.zhvi_next, 0)} | Predicted 2026: $${formatNumber(row.predicted_zhvi_next, 0)}`,
+      label: "ZHVI level (2025)",
+      value: `$${formatNumber(zhvi, 0)}`,
+      sub: `Actual 2026: $${formatNumber(zhviNext, 0)} • Predicted 2026: $${formatNumber(predictedNext, 0)}`,
     },
   ];
-  document.getElementById("kpis").innerHTML = items
-    .map((it) => `<div class="kpi"><div class="kpi__label">${it.label}</div><div class="kpi__value">${it.value}</div><div class="kpi__sub">${it.sub}</div></div>`)
+
+  kpis.innerHTML = items
+    .map(
+      (it) =>
+        `<div class="kpi"><div class="kpi__label">${it.label}</div><div class="kpi__value">${it.value}</div><div class="kpi__sub">${it.sub}</div></div>`
+    )
     .join("");
 }
 
-function renderFit(row) {
-  const badges = getBadges(row);
-  document.getElementById("fitBadges").innerHTML = badges.length
-    ? badges.map((b) => `<span class="fit-badge fit-badge--${b.id}">${b.label}</span>`).join("")
-    : `<span class="fit-badge">No above-median target signals</span>`;
-
-  const reasons = [];
-  reasons.push(
-    Number(row.zhvi) < state.medians.zhvi
-      ? "below-median entry price"
-      : "above-median entry price"
-  );
-  reasons.push(
-    Number(row.predicted_growth) > state.medians.appreciation
-      ? "above-median predicted appreciation"
-      : "below-median predicted appreciation"
-  );
-  reasons.push(
-    Number(row.volatility) < state.medians.volatility
-      ? "lower-than-median volatility"
-      : "higher-than-median volatility"
-  );
-
-  document.getElementById("whyCounty").innerHTML =
-    `<strong>Why this county?</strong> ${shortCountyLabel(row.county)} combines ${reasons.join(", ")}. ` +
-    `Use this as a county-level screen before deal-level underwriting.`;
-}
-
 function renderTrend(countyKey, row) {
+  const countyName = row?.county || state.selectedCounty || "Selected county";
   const series = state.yearlyRows
     .filter((r) => normalizeCountyName(r.county) === countyKey)
     .map((r) => ({ year: Number(r.year), zhvi: Number(r.zhvi) }))
     .filter((p) => Number.isFinite(p.year) && Number.isFinite(p.zhvi))
     .sort((a, b) => a.year - b.year);
+
   const years = series.map((p) => p.year);
   const zhvi = series.map((p) => p.zhvi);
+
+  const predictedNext = Number(row?.predicted_zhvi_next);
   const nextYear = FORECAST_YEAR + 1;
-  const predictedNext = Number(row.predicted_zhvi_next);
 
   const traces = [
     {
@@ -559,12 +498,13 @@ function renderTrend(countyKey, row) {
       mode: "lines+markers",
       x: years,
       y: zhvi,
-      name: "Actual home value",
+      name: "Actual ZHVI",
       line: { color: "rgba(233,238,248,0.85)", width: 2 },
       marker: { size: 6, color: "rgba(233,238,248,0.9)" },
       hovertemplate: "%{x}: $%{y:,.0f}<extra></extra>",
     },
   ];
+
   if (Number.isFinite(predictedNext)) {
     traces.push({
       type: "scatter",
@@ -573,55 +513,55 @@ function renderTrend(countyKey, row) {
       y: [predictedNext],
       name: "Predicted 2026",
       marker: { size: 12, color: "#59b7ff", line: { color: "white", width: 1 } },
-      text: ["Forecast"],
+      text: ["Predicted"],
       textposition: "top center",
       textfont: { size: 10, color: "rgba(89,183,255,0.95)" },
       hovertemplate: `Predicted ${nextYear}: $%{y:,.0f}<extra></extra>`,
     });
   }
 
-  Plotly.newPlot(
-    "trend",
-    traces,
-    {
-      margin: { l: 55, r: 20, t: 10, b: 40 },
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
-      xaxis: { title: "Year", dtick: 1, gridcolor: "rgba(233,238,248,0.10)" },
-      yaxis: { title: "Home value ($)", gridcolor: "rgba(233,238,248,0.10)" },
-      showlegend: true,
-      legend: { orientation: "h", y: -0.25, font: { color: "rgba(233,238,248,0.85)" } },
-      annotations: [
-        { x: 0, y: 1.1, xref: "paper", yref: "paper", showarrow: false, text: `<b>${row.county}</b>`, font: { color: "rgba(233,238,248,0.92)" } },
-      ],
-    },
-    { responsive: true, displayModeBar: false }
-  );
-}
-
-function refreshFilteredViews() {
-  renderFilters();
-  renderScatter();
-  refreshMapStyles();
-  updateScatterSelection(normalizeCountyName(state.selectedCounty || ""));
+  const layout = {
+    margin: { l: 55, r: 20, t: 10, b: 40 },
+    paper_bgcolor: "rgba(0,0,0,0)",
+    plot_bgcolor: "rgba(0,0,0,0)",
+    xaxis: { title: "Year", dtick: 1, gridcolor: "rgba(233,238,248,0.10)" },
+    yaxis: { title: "ZHVI ($)", gridcolor: "rgba(233,238,248,0.10)" },
+    showlegend: true,
+    legend: { orientation: "h", y: -0.25, font: { color: "rgba(233,238,248,0.85)" } },
+    annotations: [
+      {
+        x: 0,
+        y: 1.1,
+        xref: "paper",
+        yref: "paper",
+        showarrow: false,
+        text: `<b>${countyName}</b>`,
+        font: { color: "rgba(233,238,248,0.92)" },
+      },
+    ],
+  };
+  const config = { responsive: true, displayModeBar: false };
+  Plotly.newPlot("trend", traces, layout, config);
 }
 
 function selectCounty(countyName) {
-  const row = rowByCounty(countyName);
-  if (!row) return console.warn("No model row found for county:", countyName);
-  const countyKey = normalizeCountyName(row.county);
+  const countyKey = normalizeCountyName(countyName);
+  const row = state.countyStatsByCounty.get(countyKey);
+  if (!row) {
+    // eslint-disable-next-line no-console
+    console.warn("No model row found for county:", countyName);
+    return;
+  }
+
   state.selectedCounty = row.county;
   document.getElementById("selectedCountyLabel").textContent = row.county;
   const search = document.getElementById("countySearch");
   if (search) search.value = row.county;
 
-  if (!state.scatter.pointIndexByCounty.has(countyKey)) renderScatter();
   updateScatterSelection(countyKey);
-  refreshMapStyles();
-  renderKPIs(row);
-  renderFit(row);
+  updateMapSelection(countyKey);
+  renderKPIs(row, row.volatility);
   renderTrend(countyKey, row);
-  renderTargetCards();
 }
 
 async function main() {
@@ -634,28 +574,32 @@ async function main() {
   state.modelRows = parseCSV(modelText);
   state.yearlyRows = parseCSV(yearlyText);
   state.geojson = geojson;
+
   state.volatilityByCounty = computeVolatilityByCounty(state.yearlyRows);
   state.countyStatsByCounty = buildCountyStats(state.modelRows, state.volatilityByCounty);
-  computeDerivedMetrics();
 
-  setupHeaderControls();
-  renderTargetCards();
-  renderFilters();
-  renderDemoControls();
   renderScatter();
   renderMap();
 
-  if (state.topTargets[0]?.county) selectCounty(state.topTargets[0].county);
+  // Pick a sensible default selection: highest predicted growth.
+  let best = null;
+  for (const row of state.countyStatsByCounty.values()) {
+    if (!best || row.predicted_growth > best.predicted_growth) best = row;
+  }
+  if (best?.county) selectCounty(best.county);
+  applyScatterLabelMode();
 }
 
 main().catch((err) => {
+  // eslint-disable-next-line no-console
   console.error(err);
   const label = document.getElementById("selectedCountyLabel");
   if (label) label.textContent = "Error loading data";
   const kpis = document.getElementById("kpis");
   if (kpis) {
-    kpis.innerHTML = `<div class="kpi"><div class="kpi__label">Load error</div><div class="kpi__value">Check console</div><div class="kpi__sub">${String(
-      err?.message || err
-    )}</div></div>`;
+    kpis.innerHTML =
+      `<div class="kpi"><div class="kpi__label">Load error</div><div class="kpi__value">Check console</div><div class="kpi__sub">${String(
+        err?.message || err
+      )}</div></div>`;
   }
 });
