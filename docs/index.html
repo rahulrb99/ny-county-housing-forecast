@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NY County Risk vs Reward</title>
+    <title>House Flipper Scouts: NY County Acquisition Screener</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
     <link
       rel="stylesheet"
@@ -16,9 +16,9 @@
   <body>
     <header class="header">
       <div class="header__left">
-        <div class="header__title">NY County Risk vs Reward</div>
+        <div class="header__title">House Flipper Scouts: NY County Acquisition Screener</div>
         <div class="header__subtitle">
-          Risk = historical volatility (2021–2025). Reward = predicted 1‑year growth (forecast year 2025 → actual 2026).
+          Find low-price New York counties with strong 12-month appreciation signals for a buy-renovate-resell strategy.
         </div>
       </div>
       <div class="header__right">
@@ -30,7 +30,7 @@
           <span class="pill__sep"></span>
           <label class="search" title="Search and jump to a county">
             <span class="muted">County:</span>
-            <input id="countySearch" list="countyList" placeholder="Type to search…" autocomplete="off" />
+            <input id="countySearch" list="countyList" placeholder="Type to search..." autocomplete="off" />
             <datalist id="countyList"></datalist>
           </label>
           <span class="pill__sep"></span>
@@ -43,27 +43,55 @@
     </header>
 
     <main class="layout">
-      <section class="card">
-        <div class="card__title">Quadrant Scatter (Click a county)</div>
+      <section class="card card--targets">
+        <div class="card__title">Acquisition Targets</div>
+        <div id="targetCards" class="target-cards"></div>
+      </section>
+
+      <section class="card card--controls">
+        <div class="card__title">Target Profile</div>
+        <div class="controls">
+          <div class="control-group">
+            <div class="control-label">Median-based filters</div>
+            <div id="filterButtons" class="filter-buttons"></div>
+          </div>
+          <div class="control-group">
+            <div class="control-label">Demo controls</div>
+            <div class="demo-controls" id="demoControls"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card card--scatter">
+        <div class="card__title">Risk vs Reward Scatter (Click a county)</div>
         <div id="scatter" class="viz viz--scatter"></div>
         <div class="hint" id="scatterHint"></div>
       </section>
 
-      <section class="card">
-        <div class="card__title">NY County Map (Click a county)</div>
+      <section class="card card--map">
+        <div class="card__title">Predicted 12M Appreciation Map (Click a county)</div>
         <div id="map" class="viz viz--map"></div>
         <div class="legend" id="mapLegend"></div>
       </section>
 
       <section class="card card--details">
         <div class="card__title">
-          County Details
-          <span class="muted" id="selectedCountyLabel">—</span>
+          County Acquisition Profile
+          <span class="muted" id="selectedCountyLabel">-</span>
         </div>
         <div class="details">
           <div class="kpis" id="kpis"></div>
-          <div class="details__chart">
-            <div class="card__title card__title--small">ZHVI Trend (2021–2026)</div>
+          <div class="fit-panel">
+            <div class="card__title card__title--small">Acquisition Fit</div>
+            <div id="fitBadges" class="fit-badges"></div>
+            <div id="whyCounty" class="why-county"></div>
+            <div class="disclaimer">
+              This screens counties, not individual properties. Validate renovation cost, inventory, days on market,
+              permits, and financing before acquisition.
+            </div>
+          </div>
+          <div class="trend-panel">
+            <div class="card__title card__title--small">Home Value Trend and 2026 Forecast</div>
             <div id="trend" class="viz viz--trend"></div>
           </div>
         </div>
@@ -71,7 +99,8 @@
     </main>
 
     <footer class="footer">
-      Data sources: `model_dataset.csv`, `zillow_county_yearly.csv`, and `ny_counties.geojson` (bundled in <code>docs/data/</code>).
+      County screener only. Data sources: <code>model_dataset.csv</code>, <code>zillow_county_yearly.csv</code>, and
+      <code>ny_counties.geojson</code> bundled in <code>docs/data/</code>.
     </footer>
 
     <script
