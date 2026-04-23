@@ -486,8 +486,10 @@ function renderTrend(countyKey, row) {
     .filter((p) => Number.isFinite(p.year) && Number.isFinite(p.zhvi))
     .sort((a, b) => a.year - b.year);
 
-  const years = series.map((p) => p.year);
-  const zhvi = series.map((p) => p.zhvi);
+  const actualSeries = series.filter((p) => p.year <= FORECAST_YEAR);
+  const years = actualSeries.map((p) => p.year);
+  const zhvi = actualSeries.map((p) => p.zhvi);
+  const forecastAnchor = actualSeries[actualSeries.length - 1];
 
   const predictedNext = Number(row?.predicted_zhvi_next);
   const nextYear = FORECAST_YEAR + 1;
@@ -505,15 +507,16 @@ function renderTrend(countyKey, row) {
     },
   ];
 
-  if (Number.isFinite(predictedNext)) {
+  if (Number.isFinite(predictedNext) && forecastAnchor) {
     traces.push({
       type: "scatter",
-      mode: "markers+text",
-      x: [nextYear],
-      y: [predictedNext],
+      mode: "lines+markers+text",
+      x: [forecastAnchor.year, nextYear],
+      y: [forecastAnchor.zhvi, predictedNext],
       name: "Predicted 2026",
-      marker: { size: 12, color: "#59b7ff", line: { color: "white", width: 1 } },
-      text: ["Predicted"],
+      line: { color: "#59b7ff", width: 2, dash: "dot" },
+      marker: { size: [6, 12], color: "#59b7ff", line: { color: "white", width: 1 } },
+      text: ["", "Predicted"],
       textposition: "top center",
       textfont: { size: 10, color: "rgba(89,183,255,0.95)" },
       hovertemplate: `Predicted ${nextYear}: $%{y:,.0f}<extra></extra>`,
